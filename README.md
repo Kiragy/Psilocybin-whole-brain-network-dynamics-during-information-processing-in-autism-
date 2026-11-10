@@ -10,7 +10,7 @@ Yan Ge1,2, Tobias P. Whelan1,3, Mihail Dimitrov1, Claire L. Ellis1, Francesca Mo
 7. NIHR Biomedical Research Centre: Maudsley, London, UK 
 8. The Institute for Translational Neurodevelopment, King's College London, London, UK
 
-R code files:
+# R code files:
 haririr_drug_timeseries_initial.Rmd: ICN timeseries data cleaning and clustering resolution test
 psilaut_hariri_corenetwork.Rmd: ICN core network strength analysis
 psilaut_hariri_dynamic.Rmd: ICN dynamic analysis
