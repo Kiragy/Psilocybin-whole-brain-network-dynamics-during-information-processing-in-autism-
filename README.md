@@ -1,4 +1,4 @@
-## Psilocybin differentially shifts whole-brain network dynamics during information processing in autism
+# Psilocybin differentially shifts whole-brain network dynamics during information processing in autism
 Yan Ge1,2, Tobias P. Whelan1,3, Mihail Dimitrov1, Claire L. Ellis1, Francesca Moruzzi1, Francesca M. Ponteduro1, Johanna Kangas1, Nermin Khalil1, Fernando Zelaya4, Glynis Ivin5, Sunniva Fenn-Moltu1,2, Nicolaas A. Puts1,6,7, Declan G.M. Murphy1,6,7,8, Eileen Daly1, Grainne M. McAlonan1,6,7*†, Dafnis Batalle1,2,7*†
 
 1. Department of Forensic and Neurodevelopmental Sciences, Institute of Psychiatry, Psychology & Neuroscience, King’s College London, London, UK
@@ -10,7 +10,7 @@ Yan Ge1,2, Tobias P. Whelan1,3, Mihail Dimitrov1, Claire L. Ellis1, Francesca Mo
 7. NIHR Biomedical Research Centre: Maudsley, London, UK 
 8. The Institute for Translational Neurodevelopment, King's College London, London, UK
 
-# R code files:
+## R code files:
 haririr_drug_timeseries_initial.Rmd: ICN timeseries data cleaning and clustering resolution test
 
 psilaut_hariri_corenetwork.Rmd: ICN core network strength analysis
