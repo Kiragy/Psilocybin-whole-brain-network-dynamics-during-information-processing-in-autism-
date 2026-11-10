@@ -18,3 +18,8 @@ psilaut_hariri_corenetwork.Rmd: ICN core network strength analysis
 psilaut_hariri_dynamic.Rmd: ICN dynamic analysis
 
 boostrap_clustering_validation.Rmd: Boostrapping validation of clustering medoids
+
+## Abbreviations:
+FO: fractional occupancy
+DT/DWT: dwell time
+CNS: core network strength
