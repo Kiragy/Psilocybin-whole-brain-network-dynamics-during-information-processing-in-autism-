@@ -1,0 +1,1533 @@
+---
+title: "haririr_dyn_drug"
+output: html_document
+date: "2025-04-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# packages & data
+
+```{r}
+library(openxlsx)
+library(tidyverse)
+library(rstatix)
+library(ggrain)
+# install.packages("ggdist")
+library(ggdist)
+library(ggpubr)
+
+psilaut_dem <- read.xlsx("psilaut_dem_outlier.xlsx")
+AQ_DACS <- read.csv("PSILAUT_MASTER_Spreadsheet_CE_MD_5DASC.csv")
+AQ_DACS <- AQ_DACS %>% 
+  rename("PSILAUT_no" = ID)
+psilaut_dem <- psilaut_dem %>% 
+  dplyr::select(- "Sex", -"Group", -"IQ", -"Age", - "AQ") %>% 
+  left_join(AQ_DACS)
+psilaut_dem$Group <- as.factor(psilaut_dem$Group)
+psilaut_dem$Sex <- as.factor(psilaut_dem$Sex)
+psilaut_dem$Dose <- as.factor(psilaut_dem$Dose)
+# HARIRI_df <- read.xlsx("HARIRI_df.xlsx", sheet = "262")
+task_regressor <- read.xlsx("task_regressor.xlsx", sheet = "clean")
+ica_ts_harpsi_dem <- read.xlsx("ica_ts_harpsi_dem_beh_outlier.xlsx")
+ica_ts_harpsi_dem_dose5 <- read.xlsx("ica_ts_harpsi_dem_dose5_6aug.xlsx")
+ica_ts_harpsi_dem_dose5_con <- ica_ts_harpsi_dem_dose5 %>% 
+  filter(stimuli != "shape_1" & timewindow != "0")
+behavior_hariri <- read.xlsx("summary_behavior_hariri.xlsx")
+
+ica_ts_harpsi_demica_ts_harpsi_dem <- psilaut_dem %>% 
+  dplyr::select(sub_visit, beh_outlier) %>% 
+  full_join(ica_ts_harpsi_dem)
+
+stimuli_type <- rep(task_regressor$stimuli_type, times = 100)
+ica_ts_harpsi_dem_dose5$stimuli_type <- as.factor(stimuli_type)
+
+stimuli <- rep(task_regressor$Stimuli_Times, times = 100)
+ica_ts_harpsi_dem_dose5$stimuli <- as.factor(stimuli)
+
+ica_ts_harpsi_dem$time[is.na(ica_ts_harpsi_dem$time)] <- 0
+ica_ts_harpsi_dem$subject_id <- as.character(ica_ts_harpsi_dem$subject_id)
+ica_ts_harpsi_dem$Group <- as.factor(ica_ts_harpsi_dem$Group)
+ica_ts_harpsi_dem$Sex <- as.factor(ica_ts_harpsi_dem$Sex)
+ica_ts_harpsi_dem$block_bin2 <- as.factor(ica_ts_harpsi_dem$block_bin2 )
+ica_ts_harpsi_dem$Dose <- as.factor(ica_ts_harpsi_dem$Dose)
+ica_ts_harpsi_dem <- ica_ts_harpsi_dem %>% 
+  filter(beh_outlier != 1)
+
+ica_ts_harpsi_dem_dose5 <- ica_ts_harpsi_dem %>% 
+  filter(Dose != "Low") %>% 
+  filter(beh_outlier != 1)
+```
+
+
+# hariri ica timeseries - import data
+```{r}
+data_list <- list()
+for (id in 0:160) {
+  # Extract subject ID from the file name
+  file_name <- paste0("/Users/yange/YANGE/Phd/shiftability/PSILAUT/hariri/dr12_psi_hariri_25_all/dr_stage1_subject", sprintf("%005d", id), ".txt")
+  # Read the text file and import it as a data frame
+  data <- read.table(file_name, header = FALSE, sep = "")  # You may need to adjust parameters like sep and header based on your data
+  #transpose the data
+  #data <- t(data) 
+  # Set column names
+  colnames(data) <- paste0("ic", 0:24)
+  # Set row names as a sequence of strings
+  row_names <- paste0("t", 1:nrow(data))
+  row.names(data) <- row_names
+  # Insert time_series column as the first column
+  data$time_series <- row_names
+  data$subject_id <- id+1
+  id2 <- id+1
+  subject_key <- sprintf("subject%04d", id2)  # Corrected sprintf usage
+ 
+  data_list[[subject_key]] <- data
+}
+combined_data <- do.call(rbind, data_list)
+subject <- read.xlsx("~/YANGE/Phd/shiftability/PSILAUT/hariri/psilaut_input.xlsx")
+row_subs <- paste0(1:nrow(subject))
+subject$subject_id <- as.numeric(row_subs)
+timeseries_all <- subject%>% 
+  full_join(combined_data)
+timeseries_all <- timeseries_all %>% 
+  select(-"paths")
+write.xlsx(timeseries_all, "/Users/yange/YANGE/Phd/DFC/psilaut/ica_ts_harpsi.xlsx")
+
+timeseries_all_clean <- timeseries_all %>% 
+  select(-"ic10", -"ic13", -"ic14", -"ic16", -"ic17", -"ic15", -c(23:27)) %>% 
+  rename("sub_visit2" = CNS_no)
+psilaut_dem <- psilaut_dem %>% 
+  select(-"rs_meanFD", -"paths")
+timeseries_all_clean <- timeseries_all_clean %>% 
+  full_join(psilaut_dem)
+ica_ts_harpsi_dem <- timeseries_all_clean %>% 
+        separate(col=time_series, into=c("T", "timepoint"), sep=1, remove = FALSE) %>% 
+        select(-"T")
+ica_ts_harpsi_dem$timepoint <- as.numeric(ica_ts_harpsi_dem$timepoint)
+write.xlsx(ica_ts_harpsi_dem, "/Users/yange/YANGE/Phd/DFC/psilaut/ica_ts_harpsi_dem.xlsx")
+```
+
+# clean time-varying fd
+```{r}
+HARIRI_fd_long <- HARIRI_df %>% 
+  filter(ts != "mean") %>% 
+  pivot_longer(cols = c(2:173), names_to = "sub_visit2", values_to = "df")
+HARIRI_fd_long$sub_visit2 <- gsub("sub-", '', HARIRI_fd_long$sub_visit2)
+HARIRI_fd_long$timepoint <- as.numeric(HARIRI_fd_long$ts)
+ica_ts_harpsi_dem <- ica_ts_harpsi_dem %>% 
+  left_join(HARIRI_fd_long)
+ica_ts_harpsi_dem <- ica_ts_harpsi_dem %>% 
+  left_join(task_regressor)
+```
+# Average 
+
+```{r}
+# Define the time periods to highlight
+face_periods <- data.frame(
+  xmin = c(34, 98, 162, 226),  # Starting points of the highlighted periods
+  xmax = c(64, 128, 192, 256), # Ending points of the highlighted periods
+  ymin = rep(-Inf, 2),  # Extend the rectangles to the bottom of the plot
+  ymax = rep(Inf, 2)    # Extend the rectangles to the top of the plot
+)
+
+shapes_periods <- data.frame(
+  xmin = c(2, 66, 130, 194),  # Starting points of the highlighted periods
+  xmax = c(32, 96, 160, 224), # Ending points of the highlighted periods
+  ymin = rep(-Inf, 2),  # Extend the rectangles to the bottom of the plot
+  ymax = rep(Inf, 2)    # Extend the rectangles to the top of the plot
+)
+timewindow <- data.frame(
+  xmin = c(34,  44,  54,  64,  71,  81,  91),  # Starting points of the highlighted periods
+  xmax = c(39,  49,  59,  66,  76,  86,  96), # Ending points of the highlighted periods
+  ymin = rep(-Inf, 1),  # Extend the rectangles to the bottom of the plot
+  ymax = rep(Inf, 1)    # Extend the rectangles to the top of the plot
+)
+
+average_ts <- ica_ts_harpsi_dem_dose5 %>% 
+  dplyr::select(ic0, ic2, ic6, ic1, ic3, timepoint) %>% 
+  group_by(timepoint) %>% 
+  summarise(across(everything(), median))
+# write.xlsx(average_ts, "average_ts.xlsx")
+average <- ica_ts_harpsi_dem %>% 
+  dplyr::select(timepoint, c(7:20)) %>% 
+  group_by(timepoint) %>% 
+  summarise(across(everything(), mean))
+average_ts <- ica_ts_harpsi_dem %>% 
+  dplyr::select(Group, Dose, timepoint,) %>% 
+  group_by(Group, Dose, timepoint) %>% 
+  summarise(across(everything(), median))
+
+summary_ica2 <- ica_ts_harpsi_dem %>%
+  dplyr::select(Group, Dose, delayed_stimuli_2, PSILAUT_no, sub_visit2, 7:20, l2norm, l1norm) %>%
+  group_by(Group, Dose, delayed_stimuli_2, PSILAUT_no, sub_visit2) %>%
+  summarise(across(
+    .cols = everything(),
+      median,
+    .names = "{.col}_median"
+  ), .groups = "drop")
+
+summary_ica2 <- psilaut_dem %>% 
+  dplyr::select(-"Dose", - "paths") %>% 
+  right_join(summary_ica2) %>% 
+  separate(delayed_stimuli_2, sep = "_", c("block2", "time2"), remove = FALSE) %>% 
+  mutate(block_bin2 = if_else(block2 == "shape", "0", if_else(block2 == "face", "1", "3")))
+write.xlsx(summary_ica2, "summary_ica2.xlsx")
+
+summary_ica_d5 <- ica_ts_harpsi_dem_con_dose5 %>%
+  select(Group, Dose, block_bin, PSILAUT_no, sub_visit2, 3:16, l2norm) %>%
+  group_by(Group, Dose, block_bin, PSILAUT_no, sub_visit2) %>%
+  summarise(across(
+    .cols = everything(),
+    .fns = list(
+      median = median,
+      mean = mean,
+      q95 = ~quantile(.x, 0.95),
+      q05 = ~quantile(.x, 0.05),
+      min = min,
+      max = max
+    ),
+    .names = "{.col}_{.fn}"
+  ), .groups = "drop")
+summary_ica_d5 <- psilaut_dem %>% 
+  right_join(summary_ica_d5) %>% 
+  select(- "paths") 
+
+mean_ica_stimuli_group <- ica_ts_plb_harpsi_dem %>% 
+  select(Group, stimuli_delayed, c(3:16)) %>% 
+  group_by(Group, stimuli_delayed) %>% 
+  summarise(across(everything(), mean))
+
+
+?summarise
+?across
+```
+# visualisation
+## hist
+```{r}
+summary_ica %>% 
+  filter(block == "face") %>% 
+  ggplot(aes(x = ic0_q05)) +
+  geom_histogram(binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3)))
+hist(ica_ts_harpsi_dem$ic9, breaks = 50)
+hist(ica_ts_harpsi_dem$ic8, breaks = 50)
+?hist
+```
+
+## average
+```{r}
+average_ts %>% 
+  ggplot() +
+  geom_line( aes(x = timepoint, y = ic3, width = 2) ) +
+  # scale_color_discrete(labels=c('Non-autistic', 'Autistic')) +
+  # geom_line(data = regressor_glover_hrf_7feb,aes(x = TR, y = `predicted response`) ) +
+  #geom_line(data = task_regressor,aes(x = timepoint, y = (hrf_face*0.03)), color = "red") +
+  #geom_line(data = task_regressor,aes(x = timepoint, y = (stimuli*0.03)) , colour = "pink") +
+  # geom_line(data = task_regressor,aes(x = timepoint, y = clu5_km), color = "blue") +
+   scale_x_continuous(breaks = seq(0, 262, by = 20)) +
+  #scale_fill_manual(values=c("skyblue2", "chartreuse4", "maroon2"), labels=c('Placebo', 'Low', 'High')) +
+  #scale_color_manual(values=c("skyblue2","chartreuse4", "maroon2"), labels=c('Placebo', 'Low', 'High')) +
+  # facet_grid(rows  = vars(Group)) +
+  # geom_rect(data = face_periods, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+  #           fill = "orange", alpha = 0.3) +
+  # geom_rect(data = shapes_periods, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+  #          fill = "skyblue", alpha = 0.3) +
+  # geom_rect(data = timewindow, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+  #        fill = "red", alpha = 0.3) +
+  theme_classic() 
+```
+```{r}
+block_order = c('0', '1')
+drug_order = c("Plb", "Low", "High")
+median_ica%>% 
+  filter(block_bin == 1) %>% 
+  ggplot(aes(x = factor(Dose, level = drug_order), y = ic0, color = Group, fill = Group )) +
+  geom_rain(alpha = .6, rain.side = 'f2x2', id.long.var = "PSILAUT_no",
+            violin.args = list(color = NA, alpha = 0.6),
+            violin.args.pos = list(width = 1.2,
+                                   position = position_nudge(
+                                     x = c(rep(-0.6, 25), rep(-0.6, 32),   # Placebo
+                                           rep(-0.6, 27), rep(0.6, 30),   # 2mg
+                                           rep(0.6, 22), rep(0.6, 25))   # 5mg
+                                     )),
+            boxplot.args = list(width = 0.2, alpha = 0.5),
+            boxplot.args.pos = list(
+              position = ggpp::position_dodgenudge(
+                x = c(-0.6, 0.6,
+                      -0.6, 0.6,
+                      -0.6, 0.6))),
+            point.args = list(size = 2)
+            ) + #post; post 
+  theme_classic() +
+  scale_fill_manual(values=c("dodgerblue", "darkorange"), labels=c('Non-autistic', 'Autistic')) +
+  scale_color_manual(values=c("dodgerblue", "darkorange"), labels=c('Non-autistic', 'Autistic')) +
+#  scale_fill_manual(values=c('orange1','steelblue1'), labels=c('Shape', 'Face')) +
+#  scale_fill_brewer(palette = 'PRGn')  +
+#  ggplot(aes(x = factor(drug, level = level_order), y = clu6)) +
+# stat_boxplot(aes(color= Group), geom="errorbar",position=position_dodge(width=0.5),width=0.1) +
+# geom_boxplot(aes(color = Group),position=position_dodge(width =0.5),width=0.4) + 
+#  geom_line(aes( group= id, color = asd)) + 
+#  geom_point(aes(fill=asd,color = asd, group= id ),pch=21) + 
+#  stat_pvalue_manual(df_p_val1,label = "p.adj.signif",label.size=6,hide.ns = T) + # p values
+  coord_cartesian() + # coord
+  labs(
+    x = "Shape",
+    y = "Activity of the fusiform gyrus network",
+    fill ="Group"
+  ) +
+  # scale_fill_manual(labels=c('Non-autistic', 'Autistic')) + # 
+  # scale_fill_manual(values = fils) +
+  scale_x_discrete(labels=c('Placebo', 'Psilocybin 2mg', 'Psilocybin 5mg')) +
+  theme(
+    plot.margin = unit(c(0.5,0.5,0.5,0.5),"cm"),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.title = element_text(size = 12, color = "black",
+                              face = "bold"),
+    axis.text= element_text(size = 10, color = "black"),
+    axis.text.x = element_text(margin = margin(t = 10, b = 3)),
+    axis.text.y = element_text(size = 10, margin = margin(r = 10, l = 3)),
+    # legend.position = c(0.92,0.9),
+    legend.background = element_rect(colour = "black"),
+    legend.title = element_text(size = 9, color = "black",
+                              face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.margin = margin(t=5, l=5,r=5,b=5)
+  )
+```
+## shape
+```{r}
+pd <- position_dodge(0.6)
+drug_order = c("Plb", "High")
+summary_ica_d5 %>% 
+  filter(block_bin == 0) %>% 
+  ggplot(aes(x = factor(Dose, level = drug_order), y = ic12_median)) +
+  # Participant lines
+  geom_line(aes(group = PSILAUT_no, color = Group), alpha = 0.5, size = 0.4, 
+            # position = pd,
+            # position = position_dodge(width = 0.4)
+           ) +
+  # Jittered points
+  geom_point(
+    aes(group = PSILAUT_no, color = Group, shape = Group),
+    # position = position_jitterdodge(dodge.width = 0.6),
+    # position = pd,
+    size = 2,
+    alpha = 0.6
+  ) +
+  # Violin half (like raincloud)
+  stat_halfeye(
+    aes(color = Group, fill = Group),
+    adjust = 0.5,
+    width = 0.5,
+    .width = 0,
+    justification = -0.2,
+    position = position_dodge(width = 0.6),
+    alpha = 0.7
+  ) +
+  # Boxplot
+  geom_boxplot(
+    aes(color = Group, fill = Group),
+    width = 0.2,
+    position = position_dodge(width = 0.6),
+    alpha = 0.7
+  ) +
+  theme_classic() +
+  scale_fill_manual(name = "Groups",
+                    labels = c('Non-autistic', 'Autistic'),
+                    values=c("dodgerblue", "darkorange")) +
+   # scale_color_manual(values=c("dodgerblue", "darkorange"), labels=c('Non-autistic', 'Autistic')) +
+  scale_colour_manual(name = "Groups",
+                      labels = c('Non-autistic', 'Autistic'),
+                      values = c("dodgerblue", "darkorange")) +   
+  scale_shape_manual(name = "Groups",
+                     labels = c('Non-autistic', 'Autistic'),
+                     values = c(1, 2)) +
+  guides(fill = 'none') +
+  coord_cartesian() + # coord
+  labs(
+    x = "Shape",
+    y = "Activity of the Left Frontoparietal Network",
+    fill ="Group"
+  ) +
+  # scale_fill_manual(labels=c('Non-autistic', 'Autistic')) + # 
+  # scale_fill_manual(values = fils) +
+  scale_x_discrete(labels=c('Placebo', 'Psilocybin 5mg')) +
+  theme(
+    plot.margin = unit(c(0.5,0.5,0.5,0.5),"cm"),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.title = element_text(size = 12, color = "black",
+                              face = "bold"),
+    axis.text= element_text(size = 10, color = "black"),
+    axis.text.x = element_text(margin = margin(t = 10, b = 3)),
+    axis.text.y = element_text(size = 10, margin = margin(r = 10, l = 3)),
+    # legend.position = c(0.92,0.9),
+    legend.background = element_rect(colour = "black"),
+    legend.title = element_text(size = 9, color = "black",
+                              face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.margin = margin(t=5, l=5,r=5,b=5)
+  )
+```
+## face
+```{r}
+pd <- position_dodge(0.6)
+drug_order = c("Plb", "Low", "High")
+summary_ica_d5 %>% 
+  filter(block_bin == 1) %>% 
+  ggplot(aes(x = factor(Dose, level = drug_order), y = ic12_median)) +
+    # Participant lines
+  geom_line(aes(group = PSILAUT_no, color = Group), alpha = 0.4, size = 0.4, 
+            # position = pd,
+            # position = position_dodge(width = 0.4)
+           ) +
+    # Jittered points
+  geom_point(
+    aes(group = PSILAUT_no, color = Group, shape = Group),
+    # position = position_jitterdodge(dodge.width = 0.6),
+    # position = pd,
+    size = 2,
+    alpha = 0.6
+  ) +
+# Violin half (like raincloud)
+  stat_halfeye(
+    aes(color = Group, fill = Group),
+    adjust = 0.5,
+    width = 0.5,
+    .width = 0,
+    justification = -0.2,
+    position = position_dodge(width = 0.6),
+    alpha = 0.7
+  ) +
+  # Boxplot
+  geom_boxplot(
+    aes(color = Group, fill = Group),
+    width = 0.2,
+    position = position_dodge(width = 0.6),
+    alpha = 0.7
+  ) +
+
+  theme_classic() +
+  scale_fill_manual(name = "Groups",
+                    labels = c('Non-autistic', 'Autistic'),
+                    values=c("dodgerblue", "darkorange")) +
+   # scale_color_manual(values=c("dodgerblue", "darkorange"), labels=c('Non-autistic', 'Autistic')) +
+  scale_colour_manual(name = "Groups",
+                      labels = c('Non-autistic', 'Autistic'),
+                      values = c("dodgerblue", "darkorange")) +   
+  scale_shape_manual(name = "Groups",
+                     labels = c('Non-autistic', 'Autistic'),
+                     values = c(1, 2)) +
+  guides(fill = 'none') +
+  coord_cartesian() + # coord
+  labs(
+    x = "Face",
+    y = "Activity of the Left Frontoparietal Network",
+    fill ="Group"
+  ) +
+  # scale_fill_manual(labels=c('Non-autistic', 'Autistic')) + # 
+  # scale_fill_manual(values = fils) +
+  scale_x_discrete(labels=c('Placebo', 'Psilocybin 5mg')) +
+  theme(
+    plot.margin = unit(c(0.5,0.5,0.5,0.5),"cm"),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.title = element_text(size = 12, color = "black",
+                              face = "bold"),
+    axis.text= element_text(size = 10, color = "black"),
+    axis.text.x = element_text(margin = margin(t = 10, b = 3)),
+    axis.text.y = element_text(size = 10, margin = margin(r = 10, l = 3)),
+    # legend.position = c(0.92,0.9),
+    legend.background = element_rect(colour = "black"),
+    legend.title = element_text(size = 9, color = "black",
+                              face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.margin = margin(t=5, l=5,r=5,b=5)
+  )
+```
+## Non-autistic
+```{r}
+pd <- position_dodge(0.6)
+drug_order = c("Plb", "High")
+median_ica %>% 
+  filter(Dose != "Low" & Group == "0") %>% 
+  ggplot(aes(x = factor(Dose, level = drug_order), y = ic0)) +
+    # Participant lines
+  geom_line(aes(group = interaction(PSILAUT_no, block_bin), color = block_bin), 
+          linewidth = 0.8, alpha = 0.4
+            # position = pd,
+            # position = position_dodge(width = 0.4)
+           ) +
+# Violin half (like raincloud)
+  stat_halfeye(
+    aes(color = block_bin, fill = block_bin),
+    adjust = 0.5,
+    width = 0.5,
+    .width = 0,
+    justification = -0.2,
+    position = position_dodge(width = 0.6),
+    alpha = 0.5
+  ) +
+  # Boxplot
+  geom_boxplot(
+    aes(color = block_bin, fill = block_bin),
+    width = 0.2,
+    position = position_dodge(width = 0.6),
+    alpha = 0.7
+  ) +
+  # Jittered points
+  geom_point(
+    aes(group = interaction(PSILAUT_no, block_bin), color = block_bin, shape = block_bin),
+    # position = position_jitterdodge(dodge.width = 0.6),
+    # position = pd,
+    size = 2,
+    alpha = 0.4
+  ) +
+  theme_classic() +
+  scale_fill_manual(name = "Blocks",
+                    labels = c('Shape', 'Face'),
+                    values=c("chartreuse4", "maroon2")) +
+   # scale_color_manual(values=c("dodgerblue", "darkorange"), labels=c('Non-autistic', 'Autistic')) +
+  scale_colour_manual(name = "Blocks",
+                      labels = c('Shape', 'Face'),
+                      values = c("chartreuse4", "maroon2")) +   
+  scale_shape_manual(name = "Blocks",
+                    labels = c('Shape', 'Face'),
+                     values = c(1, 2)) +
+  coord_cartesian() + # coord
+  labs(
+    x = "Dose",
+    y = "Activity of the fusiform gyrus network",
+    fill ="Blocks"
+  ) +
+  # scale_fill_manual(labels=c('Non-autistic', 'Autistic')) + # 
+  # scale_fill_manual(values = fils) +
+  scale_x_discrete(labels=c('Placebo', 'Psilocybin 2mg', 'Psilocybin 5mg')) +
+  theme(
+    plot.margin = unit(c(0.5,0.5,0.5,0.5),"cm"),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.title = element_text(size = 12, color = "black",
+                              face = "bold"),
+    axis.text= element_text(size = 10, color = "black"),
+    axis.text.x = element_text(margin = margin(t = 10, b = 3)),
+    axis.text.y = element_text(size = 10, margin = margin(r = 10, l = 3)),
+    # legend.position = c(0.92,0.9),
+    legend.background = element_rect(colour = "black"),
+    legend.title = element_text(size = 9, color = "black",
+                              face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.margin = margin(t=5, l=5,r=5,b=5)
+  )
+```
+
+## IC1 average
+```{r}
+ggplot() +
+  geom_line(data = average_ts,aes(x = timepoint, y = ic1, group = Group, col = Group) ) +
+  scale_color_discrete(labels=c('Non-autistic', 'Autistic')) +
+  # geom_line(data = regressor_glover_hrf_7feb,aes(x = TR, y = `predicted response`) ) +
+  # geom_line(data = task_regressor,aes(x = timepoint, y = (hrf_face*0.03)) , colour = "red") +
+  # geom_line(data = task_regressor,aes(x = timepoint, y = (hrf_shape*0.03)) , colour = "pink") +
+  # geom_line(data = task_regressor,aes(x = timepoint, y = (hrf_all*0.03)) , colour = "blue") +
+  scale_x_continuous(breaks = seq(0, 262, by = 20)) +
+  facet_grid(rows  = vars(Dose)) +
+  geom_rect(data = face_periods, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+            fill = "orange", alpha = 0.3) +
+  geom_rect(data = shapes_periods, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+            fill = "skyblue", alpha = 0.3) 
+```
+# GLM - Dose 5
+```{r}
+ica_ts_harpsi_dem_dose5$Dose <- as.factor(ica_ts_harpsi_dem_dose5$Dose)
+ica_ts_harpsi_dem_dose5$block <- as.factor(ica_ts_harpsi_dem_dose5$block)
+ica_ts_harpsi_dem_dose5_230 <- ica_ts_harpsi_dem_dose5 %>% 
+  filter(block_bin!="3")
+ica_ts_harpsi_dem_con_dose5_nonau <- ica_ts_harpsi_dem_con_dose5 %>% 
+  filter(Group == 0)
+ica_ts_harpsi_dem_con_dose5_au <- ica_ts_harpsi_dem_con_dose5 %>% 
+  filter(Group == 1)
+
+
+
+summary(lmerTest::lmer(ic0 ~ block_bin * Group + block_bin * Dose + df + Age  + Sex + (1 | PSILAUT_no) + (1 | time_series), data = ica_ts_harpsi_dem_dose5_230))
+# (Intercept)        -1.940e-02  1.351e-03  3.271e+02 -14.359  < 2e-16 ***
+# block_bin1          4.188e-02  1.837e-03  2.709e+02  22.798  < 2e-16 ***
+# Group1              2.268e-03  2.800e-04  2.579e+04   8.101 5.68e-16 ***
+# DosePlb            -4.445e-03  2.810e-04  2.579e+04 -15.820  < 2e-16 ***
+summary(lmerTest::lmer(ic0 ~ block_bin * Group + block_bin * Dose + df + Age  + Sex + (1 | PSILAUT_no/time_series), data = ica_ts_harpsi_dem_con_dose5))
+lmer_dose5_ic0 <- lmerTest::lmer(scale(ic0) ~ block_bin * Group * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5)
+car::Anova(lmer_dose5_ic0, type = 3)
+emmeans::emmeans(lmer_dose5_ic0, list(pairwise ~ Group | block_bin))
+emmeans::emmeans(lmer_dose5_ic0, list(pairwise ~ Dose | block_bin * Group))
+summary(lmerTest::lmer(scale(ic0_median) ~ block2 * Group + block2 * Dose + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+# block_bin21         1.950e+00  4.260e-02  7.190e+02  45.762  < 2e-16 ***
+# Group1              9.800e-02  4.361e-02  7.190e+02   2.247  0.02494 *  
+# Dose.L              1.016e-01  3.082e-02  7.190e+02   3.297  0.00103 ** 
+# block_bin21:Group1 -1.867e-01  5.752e-02  7.190e+02  -3.246  0.00123 ** 
+# block_bin21:Dose.L -1.952e-01  4.067e-02  7.190e+02  -4.800 1.93e-06 ***
+lmer_dose5_ic0 <- lmerTest::lmer(scale(ic0_median) ~ block2 * Group + block2 * Dose + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5)
+car::Anova(lmer_dose5_ic0, type = 3)
+emmeans::emmeans(lmer_dose5_ic0, list(pairwise ~ Dose | block2))
+
+summary(lmerTest::lmer(scale(ic1) ~ block_bin * Group + Dose + scale(df) + scale(Age) + Sex 
+                       + (1 + Dose | PSILAUT_no) +  + (1 | time_series), data = ica_ts_harpsi_dem_con_dose5))
+# block_bin1         2.382e-01  1.968e-02  2.296e+04  12.104  < 2e-16 ***
+# Group1             4.544e-02  2.017e-02  2.296e+04   2.253 0.024273 *
+# block_bin1:Group1 -9.301e-02  2.669e-02  2.296e+04  -3.485 0.000494 ***
+summary(lmerTest::lmer(scale(ic1_median) ~ block_bin2 + Dose + Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+# block_bin21   0.538213   0.072461 721.000000   7.428 3.13e-13 ***
+
+summary(lmerTest::lmer(scale(ic2) ~ PSILAUT_no + scale(df) + scale(Age)  + Sex + (1 + Dose | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5))
+# Group1             5.762e-02  2.008e-02  2.296e+04   2.869  0.00412 ** 
+# block_bin1        -5.223e-02  1.961e-02  2.296e+04  -2.664  0.00773 ** 
+# Dose.L             2.826e-02  1.422e-02  2.296e+04   1.988  0.04688 *
+# Group1:block_bin1 -1.050e-01  2.657e-02  2.296e+04  -3.953 7.74e-05 ***
+# Dose.L:block_bin1 -5.198e-02  1.879e-02  2.296e+04  -2.766  0.00567 ** 
+lmer_dose5_ic2 <- lmerTest::lmer(scale(ic2) ~ block_bin * Group + block_bin * Dose  + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5)
+car::Anova(lmer_dose5_ic2, type = 3)
+emmeans::emmeans(lmer_dose5_ic2, list(pairwise ~ Group | block_bin))
+emmeans::emmeans(lmer_dose5_ic2, list(pairwise ~ Dose | block_bin))
+summary(lmerTest::lmer(scale(ic2_median) ~ block_bin2 + Dose + Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+# block_bin21  -0.28499    0.07442 721.00000  -3.830  0.00014 ***
+
+summary(lmerTest::lmer(scale(ic3) ~ block_bin * Group * Dose + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5))
+# block_bin1        -4.842e-02  1.970e-02  2.296e+04  -2.457 0.013998 *  
+# Group1             7.133e-02  2.020e-02  2.296e+04   3.532 0.000413 ***
+# block_bin1:Group1 -1.496e-01  2.672e-02  2.296e+04  -5.597  2.2e-08 ***
+# block_bin1:Group1:Dose.L  8.883e-02  3.793e-02  2.296e+04   2.342 0.019181 * 
+lmer_dose5_ic3 <- lmerTest::lmer(scale(ic3) ~ block_bin * Group * Dose + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5)
+car::Anova(lmer_dose5_ic3, type = 3)
+emmeans::emmeans(lmer_dose5_ic3, list(pairwise ~ Dose | block_bin * Group))
+summary(lmerTest::lmer(scale(ic3_median) ~ block_bin2 + Dose + Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+# block_bin21  -0.38790    0.07371 721.00000  -5.262 1.88e-07 ***
+
+summary(lmerTest::lmer(scale(ic4) ~ block_bin * Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5))
+# block_bin1        -5.349e-02  1.968e-02  2.296e+04  -2.718  0.00657 ** 
+# Group1:block_bin1 -6.744e-02  2.667e-02  2.296e+04  -2.528  0.01146 *  
+# Dose.L:block_bin1  4.190e-02  1.886e-02  2.296e+04   2.222  0.02631 *
+lmer_dose5_ic4 <- lmerTest::lmer(scale(ic4) ~ block_bin * Group + block_bin * Dose   + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5)
+car::Anova(lmer_dose5_ic4, type = 3)
+emmeans::emmeans(lmer_dose5_ic4, list(pairwise ~ Group | block_bin))
+emmeans::emmeans(lmer_dose5_ic4, list(pairwise ~ Dose | block_bin))
+summary(lmerTest::lmer(scale(ic4_median) ~ block_bin2 + Group + Dose + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+# block_bin21 -2.669e-01  7.451e-02  7.210e+02  -3.582 0.000364 ***
+
+summary(lmerTest::lmer(scale(ic5) ~ block_bin * Group * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5))
+# Dose.L             4.726e-02  1.754e-02  2.296e+04   2.695  0.00704 ** 
+# Group1:block_bin1 -6.114e-02  2.666e-02  2.296e+04  -2.294  0.02181 *  
+# Dose.L:block_bin1 -7.461e-02  1.885e-02  2.296e+04  -3.959 7.56e-05 ***
+# block_bin1:Group1:Dose.L -1.715e-01  3.781e-02  2.296e+04  -4.535 5.80e-06 ***
+lmer_dose5_ic5 <- lmerTest::lmer(scale(ic5) ~ block_bin * Group * Dose   + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5)
+car::Anova(lmer_dose5_ic5, type = 3)
+emmeans::emmeans(lmer_dose5_ic5, list(pairwise ~ Dose | block_bin * Group))
+summary(lmerTest::lmer(scale(ic5_median) ~ block_bin2 + Dose + Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+
+summary(lmerTest::lmer(ic6 ~ block_bin * Group * Dose + df + Age  + Sex + (1 | PSILAUT_no/time_series), data = ica_ts_harpsi_dem_dose5_230))
+# block_bin1        -2.568e-01  1.325e-02  2.296e+04 -19.379  < 2e-16 ***
+# Dose.L            -8.159e-02  1.418e-02  2.296e+04  -5.754 8.83e-09 ***
+# block_bin1:Dose.L  1.517e-01  1.874e-02  2.296e+04   8.096 5.98e-16 ***
+lmer_dose5_ic6 <- lmerTest::lmer(scale(ic6) ~ Group + block_bin * Dose   + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5)
+car::Anova(lmer_dose5_ic6, type = 3)
+emmeans::emmeans(lmer_dose5_ic6, list(pairwise ~ Dose | block_bin))
+summary(lmerTest::lmer(scale(ic6_median) ~ block_bin2 * Dose + Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+# block_bin21         -0.42532    0.07261 720.00000  -5.858 7.14e-09 ***
+# Dose.L              -0.26226    0.07783 720.00000  -3.369 0.000793 ***
+# block_bin21:Dose.L   0.44997    0.10268 720.00000   4.382 1.35e-05 ***
+lmer_dose5_ic6 <- lmerTest::lmer(scale(ic6_median) ~ block_bin2 * Dose + Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5)
+car::Anova(lmer_dose5_ic6, type = 3)
+emmeans::emmeans(lmer_dose5_ic6, list(pairwise ~ Dose | block_bin2))
+
+
+summary(lmerTest::lmer(scale(ic7) ~ block_bin * Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5))
+# Group1            -6.036e-02  1.985e-02  2.296e+04  -3.041 0.002363 ** 
+# block_bin1        -4.078e-01  1.938e-02  2.296e+04 -21.041  < 2e-16 ***
+# Dose.L            -9.588e-02  1.406e-02  2.296e+04  -6.821 9.27e-12 ***
+# Group1:block_bin1  9.683e-02  2.627e-02  2.296e+04   3.686 0.000228 ***
+# block_bin1:Dose.L  1.705e-01  1.858e-02  2.296e+04   9.180  < 2e-16 ***
+lmer_dose5_ic7 <- lmerTest::lmer(scale(ic7) ~ block_bin * Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5)
+car::Anova(lmer_dose5_ic7, type = 3)
+emmeans::emmeans(lmer_dose5_ic7, list(pairwise ~ Dose | block_bin))
+summary(lmerTest::lmer(scale(ic7_median) ~ block_bin2 * Dose + block_bin2 * Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+# block_bin21:Dose.L   0.389357   0.095886 719.000000   4.061 5.43e-05 ***
+# block_bin21:Group1   0.365574   0.135604 719.000000   2.696  0.00718 ** 
+lmer_dose5_ic7 <- lmerTest::lmer(scale(ic7_median) ~ block_bin2 * Dose + block_bin2 * Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5)
+car::Anova(lmer_dose5_ic7, type = 3)
+emmeans::emmeans(lmer_dose5_ic7, list(pairwise ~ Dose | block_bin2))
+
+  
+summary(lmerTest::lmer(scale(ic8_median) ~ block_bin2 + Dose + Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+lmer_dose5_ic8 <- lmerTest::lmer(scale(ic8) ~ block_bin * Group * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5)
+car::Anova(lmer_dose5_ic8, type = 3)
+emmeans::emmeans(lmer_dose5_ic8, list(pairwise ~ Dose | block_bin * Group))
+
+summary(lmerTest::lmer(scale(ic9) ~ Group + Dose + block_bin + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5))
+# block_bin1  -1.446e-01  1.324e-02  2.296e+04 -10.919  < 2e-16 ***
+summary(lmerTest::lmer(scale(ic9_median) ~ block_bin2 + Dose + Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+# block_bin21  -0.45948    0.07312 721.00000  -6.284 5.71e-10 ***
+
+summary(lmerTest::lmer(scale(ic11) ~ Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5))
+# block_bin1        -1.879e-01  1.333e-02  2.296e+04 -14.092  < 2e-16 ***
+# Dose.L            -3.062e-02  1.427e-02  2.296e+04  -2.146   0.0319 *
+# block_bin1:Dose.L  7.383e-02  1.885e-02  2.296e+04   3.917 9.01e-05 ***
+lmer_dose5_ic11 <- lmerTest::lmer(scale(ic11) ~ Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5)
+car::Anova(lmer_dose5_ic11, type = 3)
+emmeans::emmeans(lmer_dose5_ic11, list(pairwise ~ Dose | block_bin))
+summary(lmerTest::lmer(scale(ic11_median) ~ block_bin2 + Dose + Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+
+summary(lmerTest::lmer(scale(ic12) ~ Group + Dose + block_bin + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5))
+# block_bin1  -4.586e-02  1.332e-02  2.296e+04  -3.443 0.000577 ***
+summary(lmerTest::lmer(scale(ic12_median) ~ block_bin2 + Group + Dose + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+lmer_dose5_ic12 <- lmerTest::lmer(scale(ic12_median) ~ block_bin * Dose * Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose5)
+car::Anova(lmer_dose5_ic12, type = 3)
+emmeans::emmeans(lmer_dose5_ic12, list(pairwise ~ block_bin | Dose * Group))
+
+summary(lmerTest::lmer(scale(ic18) ~ block_bin * Group * Dose + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5))
+# block_bin1        -5.889e-02  1.915e-02  2.286e+04  -3.076   0.0021 **
+# block_bin1:Group1 -5.582e-02  2.597e-02  2.286e+04  -2.150   0.0316 *
+lmer_dose5_ic18 <- lmerTest::lmer(scale(ic18) ~  block_bin * Group * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5)
+car::Anova(lmer_dose5_ic18, type = 3)
+emmeans::emmeans(lmer_dose5_ic18, list(pairwise ~ Dose | block_bin * Group))
+# block_bin1:Dose.L        -5.882e-02  2.713e-02  2.290e+04  -2.168 0.030171 *  
+# Group1:Dose.L            -7.492e-02  2.837e-02  1.666e+04  -2.641 0.008274 ** 
+# block_bin1:Group1:Dose.L  1.378e-01  3.686e-02  2.290e+04   3.739 0.000185 ***
+summary(lmerTest::lmer(scale(ic18_median) ~ block_bin2 + Group + Dose + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+# block_bin21  -0.277868   0.074175 721.000000  -3.746 0.000194 ***
+lmer_dose5_ic18 <- lmerTest::lmer(ic18_median ~ block_bin * Dose * Group + mean + Age  + Sex + (1 | PSILAUT_no) + (1 | time), data = summary_ica_con_dose5)
+car::Anova(lmer_dose5_ic18, type = 3)
+emmeans::emmeans(lmer_dose5_ic18, list(pairwise ~ Dose | block_bin * Group))
+
+summary(lmerTest::lmer(scale(ic19) ~ Group  + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5))
+# Dose.L             4.662e-02  1.432e-02  2.296e+04   3.256 0.001130 **
+# block_bin1         7.642e-02  1.338e-02  2.296e+04   5.713 1.13e-08 ***
+# block_bin1:Dose.L -7.210e-02  1.892e-02  2.296e+04  -3.812 0.000138 ***
+lmer_dose5_ic19 <- lmerTest::lmer(scale(ic19) ~ Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5)
+car::Anova(lmer_dose5_ic19, type = 3)
+emmeans::emmeans(lmer_dose5_ic19, list(pairwise ~ Dose | block_bin ))
+summary(lmerTest::lmer(scale(ic19_median) ~ block_bin2 + Group +  Dose + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+# block_bin21   0.19346    0.07467 721.00000   2.591  0.00977 **
+```
+
+## visulisation
+```{r}
+drug_order = c('Plb', 'High')
+median_ica_ggrain <- summary_ica_con_dose5 %>% 
+  dplyr::select(Group, PSILAUT_no, Dose, block_bin2, c(19:32)) %>% 
+  group_by(Group, PSILAUT_no,  Dose, block_bin2) %>% 
+  summarise(across(
+    .cols = everything(),
+    median ,
+    .names = "{.col}_median"
+  ), .groups = "drop")
+median_ica_smooth <- summary_ica_con_dose5 %>% 
+  dplyr::select( Dose, block_bin2, c(19:32)) %>% 
+  group_by(block_bin2, Dose) %>% 
+  summarise(across(
+    .cols = everything(),
+    median ,
+    .names = "{.col}_median"
+  ), .groups = "drop")
+median_ica_ggrain %>% 
+  ggplot(aes(x = factor(Dose, level = drug_order), y = ic7_median_median, fill = block_bin2, color = block_bin2, shape = block_bin2)) +
+  geom_line(data = median_ica_smooth,aes(x = factor(Dose, level = drug_order), y = ic7_median_median, group = block_bin2), linewidth=1.5) +
+  geom_rain(alpha = .6, rain.side = 'f2x2',
+            violin.args = list(color = NA, alpha = .7),
+            boxplot.args = list(width = .1, alpha = .5),
+            point.args = list(size = 2),
+            boxplot.args.pos = list(width = .6,
+                position = ggpp::position_dodgenudge(width = .6, #width needed now in ggpp version 0.5.g
+                  x = c(-.2, -.13, # pre versicolor, pre virginica
+                        .13, .2))), # post; post
+            violin.args.pos = list(width = .9,
+             position = position_nudge(x = c(rep(-.4, 25*2), rep(-.4, 32*2),# pre; pre
+                                             rep(.4, 25*2), rep(.4, 32*2))))) + # id.long.var = "PSILAUT_no",
+  theme_classic() + 
+  scale_fill_manual(values=c("chartreuse4", "maroon2"), labels=c('Shape', 'Face')) +
+  # scale_color_manual(values=c("chartreuse4", "maroon2"), labels=c('Shape', 'Face')) +
+  scale_colour_manual(name = "Blocks",
+                      labels = c('Shape', 'Face'),
+                      values = c("chartreuse4", "maroon2")) +   
+  scale_shape_manual(name = "Blocks",
+                     labels = c('Shape', 'Face'),
+                     values = c(1, 2)) +
+  guides(fill = 'none') +
+#  scale_fill_manual(values=c('orange1','steelblue1'), labels=c('Shape', 'Face')) +
+#  scale_fill_brewer(palette = 'PRGn')  +
+#  ggplot(aes(x = factor(drug, level = level_order), y = clu6)) +
+# stat_boxplot(aes(color= Group), geom="errorbar",position=position_dodge(width=0.5),width=0.1) +
+# geom_boxplot(aes(color = Group),position=position_dodge(width =0.5),width=0.4) + 
+#  geom_line(aes( group= id, color = asd)) + 
+#  geom_point(aes(fill=asd,color = asd, group= id ),pch=21) + 
+#  stat_pvalue_manual(df_p_val1,label = "p.adj.signif",label.size=6,hide.ns = T) + # p values
+  coord_cartesian() + # coord
+  labs(
+    x = "Conditions",
+    y = "Median beta-values of ICN activity",
+  ) +
+  # scale_fill_manual(labels=c('Non-autistic', 'Autistic')) + # 
+  # scale_fill_manual(values = fils) +
+  scale_x_discrete(labels=c('Placebo', '5mg Psilocybin')) +
+  theme(
+    plot.margin = unit(c(0.5,0.5,0.5,0.5),"cm"),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.title = element_text(size = 12, color = "black",
+                              face = "bold"),
+    axis.text= element_text(size = 10, color = "black"),
+    axis.text.x = element_text(margin = margin(t = 10, b = 3)),
+    axis.text.y = element_text(size = 10, margin = margin(r = 10, l = 3)),
+    # legend.position = c(0.92,0.9),
+    legend.background = element_rect(colour = "black"),
+    legend.title = element_text(size = 9, color = "black",
+                              face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.margin = margin(t=5, l=5,r=5,b=5)
+  )
+```
+
+
+
+# GLM - Dose 2
+```{r}
+
+summary(lmerTest::lmer(scale(ic0) ~ block_bin * Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+lmer_dose2_ic0 <- lmerTest::lmer(scale(ic0) ~ block_bin * Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2)
+car::Anova(lmer_dose2_ic0, type = 3)
+emmeans::emmeans(lmer_dose2_ic0, list(pairwise ~ Dose | block_bin))
+summary(lmerTest::lmer(scale(ic0_median) ~ block_bin * Group + block_bin * Dose + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+lmer_dose2_ic0 <- lmerTest::lmer(scale(ic0_median) ~ block_bin * Group + block_bin * Dose + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2)
+car::Anova(lmer_dose2_ic0, type = 3)
+emmeans::emmeans(lmer_dose2_ic0, list(pairwise ~ block_bin | Dose))
+
+summary(lmerTest::lmer(scale(ic0_median) ~ block_bin * Group + block_bin * Dose  + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+lmer_dose2_ic0 <- lmerTest::lmer(scale(ic0_median) ~ block_bin * Group + block_bin * Dose  + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2)
+car::Anova(lmer_dose2_ic0, type = 3)
+emmeans::emmeans(lmer_dose2_ic0, list(pairwise ~ Dose | block_bin))
+
+summary(lmerTest::lmer(scale(ic1) ~ Dose + Group + block_bin + scale(df) + scale(Age) + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+summary(lmerTest::lmer(scale(ic1_median) ~ block_bin + Group + Dose  + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+summary(lmerTest::lmer(scale(ic2) ~ Dose + Group + block_bin + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+summary(lmerTest::lmer(scale(ic2_median) ~ Group + block_bin * Dose  + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+summary(lmerTest::lmer(scale(ic3) ~ Dose + Group + block_bin + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+summary(lmerTest::lmer(scale(ic3_median) ~ Group * block_bin + Dose  + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+summary(lmerTest::lmer(scale(ic4) ~ block_bin * Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+lmer_dose2_ic4 <- lmerTest::lmer(scale(ic4) ~ block_bin * Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2)
+car::Anova(lmer_dose2_ic4, type = 3)
+emmeans::emmeans(lmer_dose2_ic4, list(pairwise ~ block_bin| Dose))
+emmeans::emmeans(lmer_dose5_ic4, list(pairwise ~ block_bin| Dose))
+emmeans::emmeans(lmer_dose2_ic4, list(pairwise ~ Dose | block_bin))
+summary(lmerTest::lmer(scale(ic4_median) ~ block_bin * Group + block_bin * Dose + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+summary(lmerTest::lmer(scale(ic5) ~ Group + Dose + block_bin + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+summary(lmerTest::lmer(scale(ic5_median) ~ block_bin * Dose + block_bin * Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+summary(lmerTest::lmer(scale(ic6) ~ Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+lmer_dose2_ic6 <- lmerTest::lmer(scale(ic6) ~ Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2)
+car::Anova(lmer_dose2_ic6, type = 3)
+emmeans::emmeans(lmer_dose2_ic6, list(pairwise ~ Dose | block_bin))
+summary(lmerTest::lmer(scale(ic6_median) ~ block_bin * Dose * Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+summary(lmerTest::lmer(scale(ic7) ~ Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+lmer_dose2_ic7 <- lmerTest::lmer(scale(ic7) ~ Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2)
+car::Anova(lmer_dose2_ic7, type = 3)
+emmeans::emmeans(lmer_dose2_ic7, list(pairwise ~ Dose | block_bin))
+summary(lmerTest::lmer(scale(ic7_median) ~ block_bin * Dose * Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+summary(lmerTest::lmer(scale(ic8) ~ Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+lmer_dose2_ic8 <- lmerTest::lmer(scale(ic8) ~ Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2)
+car::Anova(lmer_dose2_ic8, type = 3)
+emmeans::emmeans(lmer_dose2_ic8, list(pairwise ~ block_bin | Dose))
+summary(lmerTest::lmer(scale(ic8_median) ~ Group * block_bin * Dose  + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+lmer_dose2_ic8 <- lmerTest::lmer(scale(ic8_median) ~ Group * block_bin * Dose  + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2)
+car::Anova(lmer_dose2_ic8, type = 3)
+emmeans::emmeans(lmer_dose2_ic8, list(pairwise ~ Dose | block_bin * Group))
+
+summary(lmerTest::lmer(scale(ic9) ~ Dose + block_bin * Group + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+summary(lmerTest::lmer(scale(ic9_median) ~ Group * block_bin * Dose  + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+summary(lmerTest::lmer(scale(ic11) ~ Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+lmer_dose2_ic11 <- lmerTest::lmer(scale(ic11) ~ Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2)
+car::Anova(lmer_dose2_ic11, type = 3)
+emmeans::emmeans(lmer_dose2_ic11, list(pairwise ~ Dose | block_bin))
+summary(lmerTest::lmer(scale(ic9_median) ~ Group * block_bin * Dose  + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+summary(lmerTest::lmer(scale(ic12) ~ Dose + block_bin * Group + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+summary(lmerTest::lmer(scale(ic12_median) ~ Group * block_bin * Dose  + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+summary(lmerTest::lmer(scale(ic18) ~ block_bin * Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+lmer_dose2_ic18 <- lmerTest::lmer(scale(ic18) ~ block_bin * Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 + Dose| PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2)
+car::Anova(lmer_dose2_ic18, type = 3)
+emmeans::emmeans(lmer_dose2_ic18, list(pairwise ~ Dose | block_bin))
+summary(lmerTest::lmer(scale(ic18_median) ~ block_bin * Group * Dose + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+summary(lmerTest::lmer(scale(ic19) ~ Dose * block_bin * Group + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+summary(lmerTest::lmer(scale(ic19_median) ~ block_bin * Group * Dose + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+```
+
+# L2 Norm and sd
+```{r}
+ica_ts_harpsi_dem <- ica_ts_harpsi_dem %>% 
+    mutate("l2norm" = sqrt(ic0^2 + ic1^2 + ic2^2 + ic3^2 + ic4^2 + ic5^2 + ic6^2 + ic7^2 + ic8^2 + ic9^2 + ic11^2 + ic12^2 + ic18^2 + ic19^2))
+ica_ts_harpsi_dem <- ica_ts_harpsi_dem %>% 
+    mutate("l1norm" = abs(ic0) + abs(ic1) + abs(ic2) + abs(ic3) + abs(ic4) + abs(ic5) + abs(ic6) + abs(ic7) + abs(ic8) + abs(ic9) + abs(ic11) + abs(ic12) + abs(ic18) + abs(ic19))
+
+write.xlsx(ica_ts_harpsi_dem, "ica_ts_harpsi_dem.xlsx")
+ica_ts_harpsi_dem_con_dose5 <- ica_ts_harpsi_dem_con %>% 
+  filter(Dose != "Low")
+ica_ts_harpsi_dem_con_dose2 <- ica_ts_harpsi_dem_con %>% 
+  filter(Dose != "High")
+summary(lmerTest::lmer(scale(l1norm) ~ Dose * Group + block_bin * Group + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose2))
+# Dose.L            -1.785e-01  1.281e-02  2.512e+04 -13.936  < 2e-16 ***
+# Group1            -1.899e-01  8.547e-02  6.339e+01  -2.222 0.029896 *  
+# block_bin1        -1.448e-01  1.687e-02  2.513e+04  -8.586  < 2e-16 ***
+# Dose.L:Group1      8.054e-02  1.741e-02  2.511e+04   4.625 3.76e-06 ***
+# Group1:block_bin1  6.988e-02  2.296e-02  2.513e+04   3.044 0.002339 ** 
+summary(lmerTest::lmer(scale(l2norm_median) ~ Group * Dose + block_bin + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose2))
+
+summary(lmerTest::lmer(scale(l1norm) ~ Dose * Group + block_bin2 * Group + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no) + (1|timepoint), data = ica_ts_harpsi_dem_con_dose2))
+  
+summary(lmerTest::lmer(scale(l2norm) ~ block_bin2 * Group + Group * Dose + block_bin * Dose + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no), data = ica_ts_harpsi_dem_con_dose5))
+# block_bin1        -1.284e-01  1.757e-02  2.290e+04  -7.311 2.74e-13 ***
+# Group1            -2.073e-01  8.840e-02  5.836e+01  -2.345 0.022469 *  
+# Dose.L            -2.878e-01  1.666e-02  2.293e+04 -17.275  < 2e-16 ***
+# block_bin1:Group1  7.928e-02  2.381e-02  2.290e+04   3.330 0.000869 ***
+# Group1:Dose.L      1.308e-01  1.824e-02  2.286e+04   7.168 7.85e-13 ***
+# block_bin1:Dose.L  5.674e-02  1.683e-02  2.290e+04   3.371 0.000751 ***
+summary(lmerTest::lmer(scale(l1norm_median) ~ Dose * Group + block_bin2 + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5))
+# Dose.L         -0.451623   0.065453 539.622808  -6.900 1.46e-11 ***
+# block_bin21    -0.210917   0.057968 578.271381  -3.639 0.000299 *** 
+# Dose.L:Group1   0.249365   0.087779 537.544003   2.841 0.004670 **  
+lmer_l1norm <- lmerTest::lmer(scale(l1norm_median) ~ Dose * Group * block_bin2 + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_ica_con_dose5)
+emmeans::emmeans(lmer_l1norm, list(pairwise ~ Dose | Group * block_bin2))  
+
+summary(lmerTest::lmer(scale(l1norm) ~ Dose * Group + block_bin2 * Group + scale(df) + scale(Age)  + Sex + (1 | PSILAUT_no) + (1| timepoint ), data = ica_ts_harpsi_dem_con_dose5))
+summary(lmerTest::lmer(scale(l1norm_median) ~ Dose * Group + block_bin  + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = summary_ica_con_dose5))
+
+sd_l2norm <- ica_ts_harpsi_dem %>% sd_l2norm <- ica_tGroups_harpsi_dem %>% 
+  select(Group, Dose, PSILAUT_no, sub_visit2, l2norm, block_bin, delayed_stimuli_times) %>%
+  group_by(Group, Dose, PSILAUT_no, sub_visit2, block_bin, delayed_stimuli_times) %>% 
+  summarise(sd_l2norm=sd(l2norm))
+sd_l2norm <- psilaut_dem %>% 
+  select(Group, PSILAUT_no, sub_visit2, Sex, Age, mean) %>% 
+  right_join(sd_l2norm)
+sd_l2norm_con <- sd_l2norm %>% 
+  filter(block_bin != "3" & delayed_stimuli_times != "shape_1")
+sd_l2norm_con_dose5 <- sd_l2norm_con %>% 
+  filter(Dose != "Low")
+sd_l2norm_con_dose2 <- sd_l2norm_con %>% 
+  filter(Dose != "High")
+
+summary(lmerTest::lmer(scale(sd_l2norm) ~ block_bin * Group * Dose + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = sd_l2norm_con))
+summary(lmerTest::lmer(scale(sd_l2norm) ~ block_bin + Dose + Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = sd_l2norm_con_dose2))
+# Dose.L       -0.15911    0.04813 788.08804  -3.306 0.000989 ***
+summary(lmerTest::lmer(scale(sd_l2norm) ~ block_bin * Dose + Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no), data = sd_l2norm_con_dose5))
+# Dose.L       -0.21055    0.05109 720.78961  -4.121 4.21e-05 ***
+```
+## visualisation
+```{r}
+median_l1nrom_ts <- ica_ts_harpsi_dem %>% 
+  select(timepoint, Group, Dose, ,l1norm_median) %>% 
+  group_by(timepoint, Group, Dose) %>% 
+  summarise(median_l1norm=median(l1norm_median))
+
+ggplot() +
+  geom_line(data = median_l2nrom_ts,aes(x = timepoint, y = median_l2norm, group = Dose, col = Dose) ) +
+  # scale_color_discrete(labels=c('Non-autistic', 'Autistic')) +
+  # geom_line(data = regressor_glover_hrf_7feb,aes(x = TR, y = `predicted response`) ) +
+  # geom_line(data = task_regressor,aes(x = timepoint, y = (hrf_face*0.03)) , colour = "red") +
+  # geom_line(data = task_regressor,aes(x = timepoint, y = (hrf_shape*0.03)) , colour = "pink") +
+  # geom_line(data = task_regressor,aes(x = timepoint, y = (hrf_all*0.03)) , colour = "blue") +
+  scale_x_continuous(breaks = seq(0, 262, by = 20)) +
+  scale_fill_manual(values=c("skyblue2", "chartreuse4", "maroon2"), labels=c('Placebo', 'Low', 'High')) +
+  scale_color_manual(values=c("skyblue2","chartreuse4", "maroon2"), labels=c('Placebo', 'Low', 'High')) +
+  facet_grid(rows  = vars(Group)) +
+  geom_rect(data = face_periods, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+            fill = "orange", alpha = 0.3) +
+  geom_rect(data = shapes_periods, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+            fill = "skyblue", alpha = 0.3) 
+```
+
+## L2 Norm
+```{r}
+median_l1nrom_visual <- summary_ica_con_dose5 %>% 
+  dplyr::select(Group, Dose, block_bin2, l1norm_median) %>% 
+  group_by(Group, Dose, block_bin2) %>% 
+  summarise(median_median_l1norm=median(l1norm_median))
+pd <- position_dodge(0.6)
+drug_order = c("Plb", "High")
+median_l1nrom_visual %>% 
+  filter(Group == "0") %>% 
+  ggplot(aes(x = factor(Dose, level = drug_order), y = median_l2norm)) +
+    # Participant lines
+  geom_line(aes(group = PSILAUT_no, color = Group), alpha = 0.5, size = 0.4, 
+            # position = pd,
+            # position = position_dodge(width = 0.4)
+           ) +
+# Violin half (like raincloud)
+  stat_halfeye(
+    aes(color = Group, fill = Group),
+    adjust = 0.5,
+    width = 0.5,
+    .width = 0,
+    justification = -0.2,
+    position = position_dodge(width = 0.6),
+    alpha = 0.5
+  ) +
+  # Boxplot
+  geom_boxplot(
+    aes(color = Group, fill = Group),
+    width = 0.2,
+    position = position_dodge(width = 0.6),
+    alpha = 0.5
+  ) +
+  # Jittered points
+  geom_point(
+    aes(group = PSILAUT_no, color = Group, shape = Group),
+    # position = position_jitterdodge(dodge.width = 0.6),
+    # position = pd,
+    size = 2,
+    alpha = 0.6
+  ) +
+  theme_classic() +
+  scale_fill_manual(name = "Groups",
+                    labels = c('Non-autistic', 'Autistic'),
+                    values=c("dodgerblue", "darkorange")) +
+   # scale_color_manual(values=c("dodgerblue", "darkorange"), labels=c('Non-autistic', 'Autistic')) +
+  scale_colour_manual(name = "Groups",
+                      labels = c('Non-autistic', 'Autistic'),
+                      values = c("dodgerblue", "darkorange")) +   
+  scale_shape_manual(name = "Groups",
+                     labels = c('Non-autistic', 'Autistic'),
+                     values = c(1, 2)) +
+  guides(fill = 'none') +
+  coord_cartesian() + # coord
+  labs(
+    x = "Shape",
+    y = "Median L2 Norm",
+    fill ="Group"
+  ) +
+  # scale_fill_manual(labels=c('Non-autistic', 'Autistic')) + # 
+  # scale_fill_manual(values = fils) +
+  scale_x_discrete(labels=c('Placebo', 'Psilocybin 5mg')) +
+  theme(
+    plot.margin = unit(c(0.5,0.5,0.5,0.5),"cm"),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.title = element_text(size = 12, color = "black",
+                              face = "bold"),
+    axis.text= element_text(size = 10, color = "black"),
+    axis.text.x = element_text(margin = margin(t = 10, b = 3)),
+    axis.text.y = element_text(size = 10, margin = margin(r = 10, l = 3)),
+    # legend.position = c(0.92,0.9),
+    legend.background = element_rect(colour = "black"),
+    legend.title = element_text(size = 9, color = "black",
+                              face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.margin = margin(t=5, l=5,r=5,b=5)
+  )
+```
+##visualse
+```{r}
+median_l1nrom_ggrain <- summary_ica_con_dose5 %>% 
+  dplyr::select(Group, PSILAUT_no, Dose, block_bin2, l1norm_median) %>% 
+  group_by(Group, PSILAUT_no,  Dose, block_bin2) %>% 
+  summarise(median_l1norm=median(l1norm_median))
+median_l1nrom_visual_shape <- summary_ica_con_dose5 %>% 
+  filter(block_bin2 == "0") %>% 
+  dplyr::select(Group, Dose, l1norm_median) %>% 
+  group_by(Group, Dose) %>% 
+  summarise(median_median_l1norm=median(l1norm_median))
+median_l1nrom_visual_face <- summary_ica_con_dose5 %>% 
+  filter(block_bin2 == "1") %>% 
+  dplyr::select(Group, Dose, l1norm_median) %>% 
+  group_by(Group, Dose) %>% 
+  summarise(median_median_l1norm=median(l1norm_median))
+median_l1nrom_ggrain %>% 
+  filter(block_bin2 == "1") %>%
+  ggplot(aes(x = factor(Dose, level = drug_order), y = median_l1norm, fill = Group, color = Group, shape = Group)) +
+  geom_line(data = median_l1nrom_visual_face,aes(x = factor(Dose, level = drug_order), y = median_median_l1norm, group = Group), linewidth=1.5) +
+  geom_rain(alpha = .3, rain.side = 'f2x2', id.long.var = "PSILAUT_no",
+            violin.args = list(color = NA, alpha = .7),
+            boxplot.args = list(width = .1, alpha = .5),
+            point.args = list(size = 2),
+            boxplot.args.pos = list(width = .5,
+                position = ggpp::position_dodgenudge(width = .1, #width needed now in ggpp version 0.5.g
+                  x = c(-.2, -.13, # pre versicolor, pre virginica
+                        .13, .2))), # post; post
+            violin.args.pos = list(width = .7,
+             position = position_nudge(x = c(rep(-.4, 256*2), rep(-.4, 256*2),# pre; pre
+                                             rep(.4, 256*2), rep(.4, 256*2))))) + #post; post 
+  theme_classic() +
+  #scale_fill_brewer(palette = 'PRGn') +
+  #scale_color_brewer(palette = 'PRGn', labels=c('Non-autistic', 'Autistic')) +
+  # scale_fill_brewer(palette = 'PRGn', labels=c('Non-autistic', 'Autistic')) +
+  # scale_color_brewer(palette = 'PRGn')  +
+  scale_fill_manual(values=c("dodgerblue", "darkorange")) +
+   # scale_color_manual(values=c("dodgerblue", "darkorange"), labels=c('Non-autistic', 'Autistic')) +
+  scale_colour_manual(name = "Groups",
+                      labels = c('Non-autistic', 'Autistic'),
+                      values = c("dodgerblue", "darkorange")) +   
+  scale_shape_manual(name = "Groups",
+                     labels = c('Non-autistic', 'Autistic'),
+                     values = c(1, 2)) +
+  guides(fill = 'none') +
+#  stat_boxplot(aes(color= asd), geom="errorbar",position=position_dodge(width=0.5),width=0.1) + 
+#  geom_boxplot(aes(fill = asd),position=position_dodge(width =0.5),width=0.4) + 
+#  geom_line(aes( group= id, color = asd)) + 
+#  geom_point(aes(fill=asd,color = asd, group= id ),pch=21) + 
+#  stat_pvalue_manual(df_p_val1,label = "p.adj.signif",label.size=6,hide.ns = T) + # p values
+  coord_cartesian() + # coord
+  labs(
+    x = "Drugs",
+    y = "Median L1 Norm - Face"
+  ) +
+  # scale_fill_manual(labels=c('Non-autistic', 'Autistic')) + # 
+  # scale_fill_manual(values = fils) +
+  # scale_x_continuous(breaks=c(0, 2, 5)) +
+  theme(
+    plot.margin = unit(c(0.5,0.5,0.5,0.5),"cm"),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.title = element_text(size = 12, color = "black",
+                              face = "bold"),
+    axis.text= element_text(size = 10, color = "black"),
+    axis.text.x = element_text(margin = margin(t = 10, b = 3)),
+    axis.text.y = element_text(size = 10, margin = margin(r = 10, l = 3)),
+    # legend.position = c(0.95,0.85),
+    legend.background = element_rect(colour = "black"),
+    legend.title = element_text(size = 9, color = "black",
+                              face = "bold"),
+    legend.text = element_text(size = 8),
+    legend.margin = margin(t=2, l=2,r=2,b=2)
+  )
+```
+
+## SD
+```{r}
+median_sd_l2nrom <- sd_l2norm_con %>% 
+  dplyr::select(Group, Dose, block_bin, PSILAUT_no, sub_visit2, sd_l2norm) %>% 
+  group_by(Group, Dose, block_bin, PSILAUT_no, sub_visit2) %>% 
+  summarise(median_sd_l2norm=median(sd_l2norm))
+pd <- position_dodge(0.6)
+drug_order = c("Plb", "High")
+median_l2nrom %>% 
+  filter(block_bin == "1") %>% 
+  filter(Dose != "Low") %>% 
+  ggplot(aes(x = factor(Dose, level = drug_order), y = median_l2norm)) +
+    # Participant lines
+  geom_line(aes(group = PSILAUT_no, color = Group), alpha = 0.5, size = 0.4, 
+            # position = pd,
+            # position = position_dodge(width = 0.4)
+           ) +
+# Violin half (like raincloud)
+  stat_halfeye(
+    aes(color = Group, fill = Group),
+    adjust = 0.5,
+    width = 0.5,
+    .width = 0,
+    justification = -0.2,
+    position = position_dodge(width = 0.6),
+    alpha = 0.5
+  ) +
+  # Boxplot
+  geom_boxplot(
+    aes(color = Group, fill = Group),
+    width = 0.2,
+    position = position_dodge(width = 0.6),
+    alpha = 0.5
+  ) +
+  # Jittered points
+  geom_point(
+    aes(group = PSILAUT_no, color = Group, shape = Group),
+    # position = position_jitterdodge(dodge.width = 0.6),
+    # position = pd,
+    size = 2,
+    alpha = 0.6
+  ) +
+  theme_classic() +
+  scale_fill_manual(name = "Groups",
+                    labels = c('Non-autistic', 'Autistic'),
+                    values=c("dodgerblue", "darkorange")) +
+   # scale_color_manual(values=c("dodgerblue", "darkorange"), labels=c('Non-autistic', 'Autistic')) +
+  scale_colour_manual(name = "Groups",
+                      labels = c('Non-autistic', 'Autistic'),
+                      values = c("dodgerblue", "darkorange")) +   
+  scale_shape_manual(name = "Groups",
+                     labels = c('Non-autistic', 'Autistic'),
+                     values = c(1, 2)) +
+  guides(fill = 'none') +
+  coord_cartesian() + # coord
+  labs(
+    x = "Face",
+    y = "Median L2 Norm",
+    fill ="Group"
+  ) +
+  # scale_fill_manual(labels=c('Non-autistic', 'Autistic')) + # 
+  # scale_fill_manual(values = fils) +
+  scale_x_discrete(labels=c('Placebo', 'Psilocybin 2mg', 'Psilocybin 5mg')) +
+  theme(
+    plot.margin = unit(c(0.5,0.5,0.5,0.5),"cm"),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.title = element_text(size = 12, color = "black",
+                              face = "bold"),
+    axis.text= element_text(size = 10, color = "black"),
+    axis.text.x = element_text(margin = margin(t = 10, b = 3)),
+    axis.text.y = element_text(size = 10, margin = margin(r = 10, l = 3)),
+    # legend.position = c(0.92,0.9),
+    legend.background = element_rect(colour = "black"),
+    legend.title = element_text(size = 9, color = "black",
+                              face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.margin = margin(t=5, l=5,r=5,b=5)
+  )
+```
+# Reconfiguration speed
+```{r}
+time <- rep(paste(1:262, sep=""), times = 161)
+series <- rep(paste("t", 1:262, sep=""), times = 161)
+distance_dynamic_manhattan_all_lag5s$timepoint <- time
+distance_dynamic_manhattan_all_lag5s$time_series <- series
+distance_dynamic_manhattan_all_lag5s <- distance_dynamic_manhattan_all_lag5s %>% 
+  rename("sub_visit2"= "1") 
+distance_dynamic_manhattan_all_lag5s <- distance_dynamic_manhattan_all_lag5s %>% 
+  rename("dist"= "0") %>% 
+  select(- "...1")
+distance_dynamic_manhattan_all_lag5s$timepoint <- as.numeric(distance_dynamic_manhattan_all_lag5s$timepoint)
+distance_dynamic_manhattan_all_lag5s <- ica_ts_harpsi_dem %>% 
+  dplyr::select("sub_visit2", "PSILAUT_no", Group, Sex, Age, Dose, timepoint, time_series, mean, df, delayed_stimuli_times,hrf_face, block_bin) %>% 
+  right_join(distance_dynamic_manhattan_all_lag5s)
+write.xlsx(distance_dynamic_manhattan_all_lag5s, "distance5s_manhattan_all_dem.xlsx")
+
+summary_dist <- distance5s_manhattan_all_dem %>%
+  select(Group, Dose, delayed_stimuli_times, PSILAUT_no, sub_visit2, dist) %>%
+  group_by(Group, Dose, delayed_stimuli_times, PSILAUT_no, sub_visit2) %>%
+  summarise(across(
+    .cols = everything(),
+    
+    .fns = list(
+      median = median,
+      mean = mean,
+      q95 = ~quantile(.x, 0.95),
+      max = max
+    ),
+    .names = "{.col}_{.fn}"
+  ), .groups = "drop")
+summary_dist <- psilaut_dem %>% 
+  right_join(summary_dist) %>% 
+  select(- "paths") %>% 
+  separate(delayed_stimuli_times, sep = "_", c("block", "time"), remove = FALSE) %>% 
+  mutate(block_bin = if_else(block == "shape", "0", if_else(block == "face", "1", "3")))
+```
+## Glm
+```{r}
+distance5s_manhattan_all_dem_con <- distance5s_manhattan_all_dem %>% 
+  filter(block_bin != "3" & delayed_stimuli_times != "shape_1")
+distance5s_manhattan_all_dem_con_dose5 <- distance5s_manhattan_all_dem_con %>% 
+  filter(Dose != "Low")
+distance5s_manhattan_all_dem_con_dose2 <- distance5s_manhattan_all_dem_con %>% 
+  filter(Dose != "High")
+
+summary(lmerTest::lmer(data = distance5s_manhattan_all_dem_con_dose5, scale(dist) ~ Dose * block_bin * Group + Sex + scale(df) + scale(Age) + (1|sub_visit2)))
+# Dose.L            -1.952e-01  5.251e-02  1.050e+02  -3.717 0.000325 ***
+# Dose.L:block_bin1  6.883e-02  1.703e-02  2.286e+04   4.042 5.31e-05 ***
+# block_bin1:Group1  9.610e-02  2.408e-02  2.286e+04   3.991 6.60e-05 ***
+
+summary(lmerTest::lmer(data = distance5s_manhattan_all_dem_con_dose2, scale(dist) ~ Dose * block_bin * Group + Sex + scale(df) + scale(Age) + (1|PSILAUT_no)))
+# Dose.L                   -1.711e-01  1.901e-02  2.519e+04  -8.998  < 2e-16 ***
+# block_bin1               -1.136e-01  1.718e-02  2.513e+04  -6.613 3.84e-11 ***
+# Dose.L:block_bin1         9.298e-02  2.429e-02  2.513e+04   3.827  0.00013 ***
+# Dose.L:Group1             1.228e-01  2.586e-02  2.519e+04   4.748 2.07e-06 ***
+# Dose.L:block_bin1:Group1 -8.192e-02  3.306e-02  2.513e+04  -2.478  0.01321 * 
+lmer_dist_dose2 <- lmerTest::lmer(data = distance_dynamic_manhattan_all_lag5s_con_dose2, scale(dist) ~ Dose * block_bin * Group + Sex + scale(df) + scale(Age) + (1|PSILAUT_no))
+car::Anova(lmer_dist_dose2)
+emmeans::emmeans(lmer_dist_dose2, list(pairwise ~ Dose | block_bin * Group))
+
+summary(lmerTest::lmer(scale(dist_median) ~ block_bin2 * Dose + Dose * Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_dist_con_dose5))
+# DosePlb               0.75169    0.11435 688.04978   6.574 9.69e-11 ***
+# block_bin21:DosePlb  -0.22870    0.11625 659.70368  -1.967   0.0496 *  
+# DosePlb:Group1       -0.51618    0.12477 697.20612  -4.137 3.95e-05 ***
+lmer_dose5_dist <- lmerTest::lmer(scale(dist_median) ~ block_bin2 * Dose + Dose * Group + scale(mean) + scale(Age)  + Sex + (1 | PSILAUT_no/time2), data = summary_dist_con_dose5)
+car::Anova(lmer_dose5_dist, type = 3)
+emmeans::emmeans(lmer_dose5_dist, list(pairwise ~ Dose | block_bin2 * Group))
+
+summary(lmerTest::lmer(dist_median ~ block_bin + Dose * Group + mean + Age  + Sex + (1 | PSILAUT_no) + (1 | time), data = summary_dist_con_dose2))
+# Dose.L:Group1      1.711e-02  7.599e-03  7.758e+02   2.251 0.024653 *  
+
+```
+
+## visualisation
+
+```{r}
+median_dist_ts <- distance_dynamic_manhattan_all_lag5s %>% 
+  select(timepoint, Group, Dose, dist) %>% 
+  group_by(timepoint, Group, Dose) %>% 
+  summarise(median_dist = median(dist))
+
+ggplot() +
+  geom_line(data = median_dist_ts,aes(x = timepoint, y = median_dist, group = Dose, col = Dose) ) +
+  # scale_color_discrete(labels=c('Non-autistic', 'Autistic')) +
+  # geom_line(data = regressor_glover_hrf_7feb,aes(x = TR, y = `predicted response`) ) +
+  # geom_line(data = task_regressor,aes(x = timepoint, y = (hrf_face*0.03)) , colour = "red") +
+  # geom_line(data = task_regressor,aes(x = timepoint, y = (hrf_shape*0.03)) , colour = "pink") +
+  # geom_line(data = task_regressor,aes(x = timepoint, y = (hrf_all*0.03)) , colour = "blue") +
+  scale_x_continuous(breaks = seq(0, 262, by = 20)) +
+  scale_fill_manual(values=c("skyblue2", "chartreuse4", "maroon2"), labels=c('Placebo', 'Low', 'High')) +
+  scale_color_manual(values=c("skyblue2","chartreuse4", "maroon2"), labels=c('Placebo', 'Low', 'High')) +
+  facet_grid(rows  = vars(Group)) +
+  geom_rect(data = face_periods, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+            fill = "orange", alpha = 0.3) +
+  geom_rect(data = shapes_periods, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+            fill = "skyblue", alpha = 0.3) 
+```
+
+```{r}
+median_dist <- distance5s_manhattan_all_dem_con_dose5 %>% 
+  dplyr::select(Group, Dose, block_bin, PSILAUT_no, sub_visit2, dist) %>% 
+  group_by(Group, Dose, block_bin, PSILAUT_no, sub_visit2) %>% 
+  summarise(median_dist=median(dist))
+pd <- position_dodge(0.6)
+drug_order = c("Plb", "Low", "High")
+median_dist %>% 
+  filter(block_bin == "1") %>% 
+  ggplot(aes(x = factor(Dose, level = drug_order), y = median_dist)) +
+    # Participant lines
+  geom_line(aes(group = PSILAUT_no, color = Group), alpha = 0.5, size = 0.4, 
+            # position = pd,
+            # position = position_dodge(width = 0.4)
+           ) +
+# Violin half (like raincloud)
+  stat_halfeye(
+    aes(color = Group, fill = Group),
+    adjust = 0.5,
+    width = 0.5,
+    .width = 0,
+    justification = -0.2,
+    position = position_dodge(width = 0.6),
+    alpha = 0.5
+  ) +
+  # Boxplot
+  geom_boxplot(
+    aes(color = Group, fill = Group),
+    width = 0.2,
+    position = position_dodge(width = 0.6),
+    alpha = 0.5
+  ) +
+  # Jittered points
+  geom_point(
+    aes(group = PSILAUT_no, color = Group, shape = Group),
+    # position = position_jitterdodge(dodge.width = 0.6),
+    # position = pd,
+    size = 2,
+    alpha = 0.6
+  ) +
+  theme_classic() +
+  scale_fill_manual(name = "Groups",
+                    labels = c('Non-autistic', 'Autistic'),
+                    values=c("dodgerblue", "darkorange")) +
+   # scale_color_manual(values=c("dodgerblue", "darkorange"), labels=c('Non-autistic', 'Autistic')) +
+  scale_colour_manual(name = "Groups",
+                      labels = c('Non-autistic', 'Autistic'),
+                      values = c("dodgerblue", "darkorange")) +   
+  scale_shape_manual(name = "Groups",
+                     labels = c('Non-autistic', 'Autistic'),
+                     values = c(1, 2)) +
+  guides(fill = 'none') +
+  coord_cartesian() + # coord
+  labs(
+    x = "Face",
+    y = "Median Reconfiguration Speed",
+    fill ="Group"
+  ) +
+  # scale_fill_manual(labels=c('Non-autistic', 'Autistic')) + # 
+  # scale_fill_manual(values = fils) +
+  scale_x_discrete(labels=c('Placebo', 'Psilocybin 5mg')) +
+  theme(
+    plot.margin = unit(c(0.5,0.5,0.5,0.5),"cm"),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.title = element_text(size = 12, color = "black",
+                              face = "bold"),
+    axis.text= element_text(size = 10, color = "black"),
+    axis.text.x = element_text(margin = margin(t = 10, b = 3)),
+    axis.text.y = element_text(size = 10, margin = margin(r = 10, l = 3)),
+    # legend.position = c(0.92,0.9),
+    legend.background = element_rect(colour = "black"),
+    legend.title = element_text(size = 9, color = "black",
+                              face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.margin = margin(t=5, l=5,r=5,b=5)
+  )
+```
+```{r}
+median_dist_ggrain <- summary_dist_con_dose5 %>% 
+  dplyr::select(Group, PSILAUT_no, Dose, block_bin2, dist_median) %>% 
+  group_by(Group, PSILAUT_no,  Dose, block_bin2) %>% 
+  summarise(median_dist = median(dist_median))
+median_dist_visual_shape <- summary_dist_con_dose5 %>% 
+  filter(block_bin2 == "0") %>% 
+  dplyr::select(Group, Dose, dist_median) %>% 
+  group_by(Group, Dose) %>% 
+  summarise(median_median_dist = median(dist_median))
+median_dist_visual_face <- summary_dist_con_dose5 %>% 
+  filter(block_bin2 == "1") %>% 
+  dplyr::select(Group, Dose, dist_median) %>% 
+  group_by(Group, Dose) %>% 
+  summarise(median_median_dist = median(dist_median))
+median_dist_ggrain %>% 
+  filter(block_bin2 == "1") %>%
+  ggplot(aes(x = factor(Dose, level = drug_order), y = median_dist, fill = Group, color = Group, shape = Group)) +
+  geom_line(data = median_dist_visual_face,aes(x = factor(Dose, level = drug_order), y = median_median_dist, group = Group), linewidth=1.5) +
+  geom_rain(alpha = .3, rain.side = 'f2x2', id.long.var = "PSILAUT_no",
+            violin.args = list(color = NA, alpha = .7),
+            boxplot.args = list(width = .1, alpha = .5),
+            point.args = list(size = 2),
+            boxplot.args.pos = list(width = .5,
+                position = ggpp::position_dodgenudge(width = .1, #width needed now in ggpp version 0.5.g
+                  x = c(-.2, -.13, # pre versicolor, pre virginica
+                        .13, .2))), # post; post
+            violin.args.pos = list(width = .7,
+             position = position_nudge(x = c(rep(-.4, 256*2), rep(-.4, 256*2),# pre; pre
+                                             rep(.4, 256*2), rep(.4, 256*2))))) + #post; post 
+  theme_classic() +
+  #scale_fill_brewer(palette = 'PRGn') +
+  #scale_color_brewer(palette = 'PRGn', labels=c('Non-autistic', 'Autistic')) +
+  # scale_fill_brewer(palette = 'PRGn', labels=c('Non-autistic', 'Autistic')) +
+  # scale_color_brewer(palette = 'PRGn')  +
+  scale_fill_manual(values=c("dodgerblue", "darkorange")) +
+   # scale_color_manual(values=c("dodgerblue", "darkorange"), labels=c('Non-autistic', 'Autistic')) +
+  scale_colour_manual(name = "Groups",
+                      labels = c('Non-autistic', 'Autistic'),
+                      values = c("dodgerblue", "darkorange")) +   
+  scale_shape_manual(name = "Groups",
+                     labels = c('Non-autistic', 'Autistic'),
+                     values = c(1, 2)) +
+  guides(fill = 'none') +
+#  stat_boxplot(aes(color= asd), geom="errorbar",position=position_dodge(width=0.5),width=0.1) + 
+#  geom_boxplot(aes(fill = asd),position=position_dodge(width =0.5),width=0.4) + 
+#  geom_line(aes( group= id, color = asd)) + 
+#  geom_point(aes(fill=asd,color = asd, group= id ),pch=21) + 
+#  stat_pvalue_manual(df_p_val1,label = "p.adj.signif",label.size=6,hide.ns = T) + # p values
+  coord_cartesian() + # coord
+  labs(
+    x = "Drugs",
+    y = "Median Reconfiguration Speed - Face"
+  ) +
+  # scale_fill_manual(labels=c('Non-autistic', 'Autistic')) + # 
+  # scale_fill_manual(values = fils) +
+  # scale_x_continuous(breaks=c(0, 2, 5)) +
+  theme(
+    plot.margin = unit(c(0.5,0.5,0.5,0.5),"cm"),
+    panel.background = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.title = element_text(size = 12, color = "black",
+                              face = "bold"),
+    axis.text= element_text(size = 10, color = "black"),
+    axis.text.x = element_text(margin = margin(t = 10, b = 3)),
+    axis.text.y = element_text(size = 10, margin = margin(r = 10, l = 3)),
+    # legend.position = c(0.95,0.85),
+    legend.background = element_rect(colour = "black"),
+    legend.title = element_text(size = 9, color = "black",
+                              face = "bold"),
+    legend.text = element_text(size = 8),
+    legend.margin = margin(t=2, l=2,r=2,b=2)
+  )
+```
+
+# k medoid
+```{r}
+library(factoextra)
+library(NbClust)
+library(psych)
+library(cluster)
+library(clusterSim)
+ica_ts_harpsi <- read.xlsx("~/YANGE/Phd/DFC/psilaut/ica_ts_harpsi_dem.xlsx", sheet = "Sheet 1")
+cluster_timepoint_dat <- ica_ts_harpsi %>% 
+  select(- "subject_id", -"timepoint") %>% 
+  pivot_wider(names_from = sub_visit2, values_from = c(2:15))
+
+ica_ts_harpsi_dem_dose5 %>% 
+  group_by(block2) %>% 
+  count(clu7)
+```
+## DB index -dose 5
+```{r}
+library(clusterSim)
+
+index_db_pam <- function(data,  dismtr) {
+  db <- c()
+  for (i in 1:15) {
+    clu <- pam(dismtr, i, diss = TRUE, pamonce = 4, metric = "manhattan", stand = FALSE)  
+    index_db <- index.DB(data, clu$clustering, dismtr, centrotypes = "medoids", p=1, q=2)
+    db[i] <- index_db$DB
+  }
+
+  k <- 1:15
+  db_index <- as.data.frame(cbind(k, db))
+  write.xlsx(db_index, "db_index_psilaut_hariri.xlsx")
+  plot(db_index$k, db_index$db,xlab =  "Cluster number k",
+       ylab = "Davies - Bouldin Index",
+       main = "Davies - Bouldin Plot", cex.main=1,
+       col = "dodgerblue1", cex = 0.9 ,
+       lty=1 , type="o" , lwd=1, pch=4,
+       bty = "l",
+       las = 1, cex.axis = 0.8, tcl  = -0.2)
+}
+
+dismtr <- dist(ica_ts_harpsi_dem_dose5[7:20], method = "manhattan")
+index_db_pam(ica_ts_harpsi_dem_dose5[7:20], dismtr)
+
+```
+
+
+## CH index -dose 5
+```{r}
+dismtr <- dist(ica_ts_harpsi_dem_dose5[7:20], method = "manhattan")
+index_ch_pam <- function(data, dismtr) {
+  db <- c()
+  for (i in 1:15) {
+  clu <- pam(data,i, diss = FALSE, pamonce = 4, metric = "manhattan", stand = FALSE) 
+  index_ch <- index.G1(data, clu$clustering, d=dismtr, centrotypes="medoids" )
+  db[i] <- index_ch}
+
+  ch <- db[1:15]
+  k <- 1:15
+  ch_index <- as.data.frame(cbind(k, ch))
+  write.xlsx(ch_index, "ch_index_psilaut_hariri.xlsx")
+  plot(ch_index$k, ch_index$ch,xlab =  "Cluster number k",
+       ylab = "Calinski-Harabasz Pseudo F-statistic",
+       main = "Calinski-Harabasz Pseudo F-statistic Plot", cex.main=1,
+       col = "dodgerblue1", cex = 0.9 ,
+       lty=1 , type="o" , lwd=1, pch=4,
+       bty = "l",
+       las = 1, cex.axis = 0.8, tcl  = -0.2)
+}
+
+index_ch_pam(ica_ts_harpsi_dem_dose5[7:20], dismtr)
+ch_index <- read.xlsx("ch_index_psilaut_hariri.xlsx")
+
+plot(ch_index$k, ch_index$ch,xlab =  "Cluster number k",
+       ylab = "Calinski-Harabasz Pseudo F-statistic",
+       main = "Calinski-Harabasz Pseudo F-statistic Plot", cex.main=1,
+       col = "dodgerblue1", cex = 0.9 ,
+       lty=1 , type="o" , lwd=1, pch=4,
+       bty = "l",
+       las = 1, cex.axis = 0.8, tcl  = -0.2)
+dev.off()
+```
+
+
+
+```{r}
+clu4 <- pam(ica_ts_harpsi_dem_dose5[7:20],4, diss = FALSE, pamonce = 4, metric = "manhattan", stand = FALSE) 
+ica_ts_harpsi_dem_dose5$clu4 <- clu4$clustering
+medoids <- as.data.frame(clu4$medoids)
+medoids$medoid <- c("M1_4", "M2_4", "M3_4", "M4_4")
+
+```
+                                                                
