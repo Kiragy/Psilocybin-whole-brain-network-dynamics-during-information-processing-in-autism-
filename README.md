@@ -12,6 +12,9 @@ Yan Ge1,2, Tobias P. Whelan1,3, Mihail Dimitrov1, Claire L. Ellis1, Francesca Mo
 
 # R code files:
 haririr_drug_timeseries_initial.Rmd: ICN timeseries data cleaning and clustering resolution test
+
 psilaut_hariri_corenetwork.Rmd: ICN core network strength analysis
+
 psilaut_hariri_dynamic.Rmd: ICN dynamic analysis
+
 boostrap_clustering_validation.Rmd: Boostrapping validation of clustering medoids
