@@ -21,5 +21,7 @@ boostrap_clustering_validation.Rmd: Boostrapping validation of clustering medoid
 
 ## Abbreviations:
 FO: fractional occupancy
+
 DT/DWT: dwell time
+
 CNS: core network strength
