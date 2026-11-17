@@ -32,15 +32,15 @@ ica_ts_harpsi_dem_dose5 <- read.xlsx("ica_ts_harpsi_dem_dose5_17nov.xlsx") # rea
 ## DB index -dose 5
 ```{r}
 index_db_pam <- function(data,  dismtr) {
-  db <- c()
-  for (i in 2:15) {
-    clu <- pam(data,i, diss = FALSE, pamonce = 4, metric = "manhattan", stand = FALSE)  
-    index_db <- index.DB(data, clu$clustering, dismtr, centrotypes = "medoids", p=1, q=2)
-    db[i] <- index_db$DB
+  k  <- 2:15
+  db <- numeric(length(k))
+  for (j in seq_along(k)) {
+    clu <- pam(data, k[j], diss = FALSE, pamonce = 4, metric = "manhattan", stand = FALSE)  
+    db[j] <- index.DB(data, clu$clustering, d = dismtr,
+                    centrotypes = "medoids", p = 1, q = 2)$DB
   }
 
-  k <- 2:15
-  db_index <- as.data.frame(cbind(k, db))
+  db_index <- as.data.frame(k = k, db = db)
   write.xlsx(db_index, "db_index_psilaut_hariri.xlsx")
   plot(db_index$k, db_index$db,xlab =  "Cluster number k",
        ylab = "Davies - Bouldin Index",
